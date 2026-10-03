@@ -551,8 +551,72 @@ static pid_t spawn_daemon(const char *path, char *const argv[], char *const envp
     return pid;
 }
 #define SSH_DIR "/userdisk/ssh"
+/* 密码登录用：把 /etc/shadow 盖成 root 口令 = SSH_PASSWORD 的副本（原厂口令未知）。
+ * 盐固定，哈希由笔上的 busybox mkpasswd 现算；算不出来时用这个预生成的兜底值。 */
+#define SSH_PASSWORD "ydpen2026"
+#define SHADOW_SALT "PenTermSalt2026"
+#define SHADOW_FALLBACK_HASH "$5$PenTermSalt2026$oKJZ71L5cOec.4YlgQCep1uhaBUf80m5kccwRk1Fpz0"
 static pid_t g_sshd_pid = 0;
 static int g_sshd_port = 0;
+
+/* 文件里是否有 root: 开头的行（用来判断 /etc/shadow 是否健康） */
+static int file_has_root(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    char line[1024];
+    int found = 0;
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "root:", 5) == 0) { found = 1; break; }
+    }
+    fclose(f);
+    return found;
+}
+
+static int copy_file(const char *src, const char *dst)
+{
+    FILE *in = fopen(src, "rb"), *out;
+    char buf[4096];
+    size_t n;
+    if (!in) return -1;
+    out = fopen(dst, "wb");
+    if (!out) { fclose(in); return -1; }
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) { fclose(in); fclose(out); return -1; }
+    }
+    fclose(in);
+    return (fclose(out) == 0) ? 0 : -1;
+}
+
+/* 生成 /etc/shadow 的副本：把 root 那一行的口令字段换成 SSH_PASSWORD 的哈希。
+ * 纯 C 读写、不经过 shell —— shell 里 $5$xxx 这种哈希很容易被二次展开搞坏。
+ * 返回 0 表示成功且找到了 root 行。 */
+static int write_shadow_copy(const char *src, const char *dst)
+{
+    FILE *in = fopen(src, "r"), *out;
+    char line[1024];
+    int done = 0;
+    if (!in) return -1;
+    out = fopen(dst, "w");
+    if (!out) { fclose(in); return -1; }
+    while (fgets(line, sizeof(line), in)) {
+        if (!done && strncmp(line, "root:", 5) == 0) {
+            char *rest = strchr(line + 5, ':');
+            if (rest) {
+                char *nl = strchr(rest, '\n');
+                if (nl) *nl = '\0';
+                fprintf(out, "root:%s%s\n", SHADOW_FALLBACK_HASH, rest);
+                done = 1;
+                continue;
+            }
+        }
+        fputs(line, out);
+    }
+    fclose(in);
+    if (fclose(out) != 0) return -1;
+    chmod(dst, 0600);
+    return done ? 0 : -1;
+}
 
 static JSValue js_sshd_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -573,6 +637,27 @@ static JSValue js_sshd_start(JSContext *ctx, JSValueConst this_val, int argc, JS
              "[ -f " SSH_DIR "/ssh_host_ed25519_key ] || ssh-keygen -q -t ed25519 -N '' -f " SSH_DIR "/ssh_host_ed25519_key; "
              "[ -f " SSH_DIR "/ssh_host_rsa_key ] || ssh-keygen -q -t rsa -b 2048 -N '' -f " SSH_DIR "/ssh_host_rsa_key; "
              "chmod 600 " SSH_DIR "/ssh_host_*_key; ");
+
+    /* 密码登录：原厂 /etc/shadow 里 root 的口令是未知的，拿它没法登 sshd。
+     * 做法：把 /etc/shadow 里 root 的口令字段换成 SSH_PASSWORD 的哈希（C 里改，不走 shell），
+     *       bind mount 盖到 /etc/shadow 上。重启即自动还原。 */
+    {
+        char src[160], dst[160];
+        int ok = 0;
+        snprintf(src, sizeof(src), "%s/shadow.orig", SSH_DIR);
+        snprintf(dst, sizeof(dst), "%s/shadow", SSH_DIR);
+        if (!file_has_root(src)) {                       /* 没有干净副本就存一份 */
+            if (file_has_root("/etc/shadow")) copy_file("/etc/shadow", src);
+        }
+        if (!file_has_root(src)) snprintf(src, sizeof(src), "/etc/shadow");
+        ok = (write_shadow_copy(src, dst) == 0);
+        if (ok) {
+            JSValue m = js_exec_sync(ctx, JS_UNDEFINED, 1, (JSValueConst[]){ JS_NewString(ctx,
+                "grep -q ' /etc/shadow ' /proc/mounts || mount --bind " SSH_DIR "/shadow /etc/shadow") });
+            (void)m;
+        }
+        JS_SetPropertyStr(ctx, o, "shadow", JS_NewBool(ctx, ok));
+    }
     if (pubkey && pubkey[0]) {
         char *q = (char *)pubkey;
         while (*q == ' ' || *q == '\n') q++;
@@ -600,7 +685,12 @@ static JSValue js_sshd_start(JSContext *ctx, JSValueConst this_val, int argc, JS
     cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"AuthorizedKeysFile=" SSH_DIR "/authorized_keys";
     cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"StrictModes=no";
     cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"PermitRootLogin=yes";
-    cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"PasswordAuthentication=no";
+    /* 密码认证打开（配合上面的 shadow 副本）；这个 sshd 没编 PAM，
+     * 所以传 UsePAM 会直接报 "Unsupported option" 起不来 —— 千万别加。
+     * keyboard-interactive 在无 PAM 时没有后端，关掉它客户端就只问一次密码。 */
+    cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"PasswordAuthentication=yes";
+    cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"KbdInteractiveAuthentication=no";
+    cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"PubkeyAuthentication=yes";
     cargv[n++] = (char *)"-o";        cargv[n++] = (char *)"PidFile=/tmp/sshd_term.pid";
     cargv[n++] = NULL;
     char *cenvp2[3];
@@ -612,7 +702,9 @@ static JSValue js_sshd_start(JSContext *ctx, JSValueConst this_val, int argc, JS
     JS_SetPropertyStr(ctx, o, "ok", JS_TRUE);
     JS_SetPropertyStr(ctx, o, "port", JS_NewInt32(ctx, port));
     JS_SetPropertyStr(ctx, o, "key", JS_NewString(ctx, SSH_DIR "/authorized_keys"));
-    JS_SetPropertyStr(ctx, o, "hint", JS_NewString(ctx, "ssh -p <port> root@<笔IP>"));
+    JS_SetPropertyStr(ctx, o, "password", JS_NewString(ctx, SSH_PASSWORD));
+    JS_SetPropertyStr(ctx, o, "hint", JS_NewString(ctx,
+        "ssh -p 2222 root@<笔IP>    口令: " SSH_PASSWORD "    （也可把电脑公钥写进 " SSH_DIR "/authorized_keys 免密登录）"));
     if (pubkey) JS_FreeCString(ctx, pubkey);
     return o;
 }
@@ -620,8 +712,12 @@ static JSValue js_sshd_start(JSContext *ctx, JSValueConst this_val, int argc, JS
 static JSValue js_sshd_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
+    /* 别用 pkill -f 'sshd -D -p' —— 那串会匹配到本命令自己的 sh -c 命令行，把自己杀掉
+     * （keeper 踩过同样的坑）。按 pid 文件杀，再撤掉 shadow 的 bind mount 恢复原厂口令。 */
     JSValue r = js_exec_sync(ctx, JS_UNDEFINED, 1,
-                             (JSValueConst[]){ JS_NewString(ctx, "pkill -f 'sshd -D -p' ; echo stopped") });
+                             (JSValueConst[]){ JS_NewString(ctx,
+        "P=/tmp/sshd_term.pid; [ -f $P ] && kill $(cat $P) 2>/dev/null; rm -f $P; "
+        "grep -q ' /etc/shadow ' /proc/mounts && umount /etc/shadow; echo stopped") });
     (void)r;
     g_sshd_port = 0;
     return JS_TRUE;

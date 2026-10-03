@@ -1,6 +1,6 @@
 # 更新日志 / CHANGELOG
 
-PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 48 个发布版本）。
+PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 50 个发布版本）。
 
 每个版本的 `.amr` 都在 [`dist/`](dist/)，GitHub 上每个版本也各自带一个 Release（附件就是这个包）。
 
@@ -59,6 +59,8 @@ PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 48 个发布版�
 | [`9.3.4`](dist/terminal-9.3.4.amr) | 467,677 | 400,392 | 20,598 | 11 | 尝试用 flex 把 × 撑到行右侧 —— 该框架里 text 的 flex 不生效，未达成（记录在案）。 |
 | [`9.3.5`](dist/terminal-9.3.5.amr) | 467,689 | 400,392 | 20,629 | 11 | × 改用**绝对定位钉在行最右端**，与 ▶ 隔开整行，避免误触。 |
 | [`9.3.6`](dist/terminal-9.3.6.amr) | 467,821 | 400,392 | 20,939 | 11 | **修 bug**：Up/Dn 载入后 shell 原命令行仍有同一条命令，点「发送」会被追加成 `toptop`（… |
+| [`9.3.8`](dist/terminal-9.3.8.amr) | 472,850 | 406,352 | 21,423 | 11 | **修 sshd 登录 bug**：应用起的 sshd 之前 `PasswordAuthentication=no`… |
+| [`9.3.9`](dist/terminal-9.3.9.amr) | 472,904 | 406,416 | 21,423 | 11 | sshdStop 改用 pid 文件杀进程（原先的 `pkill -f 'sshd -D -p'` 会匹配到自己的 … |
 
 ## 阶段
 
@@ -426,6 +428,22 @@ PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 48 个发布版�
 - 页面字节码 `Component.js.bin` = **20,939 B**
 - 变化：★ **修 bug**：Up/Dn 载入后 shell 原命令行仍有同一条命令，点「发送」会被追加成 `toptop`（执行两遍）→ 载入后立刻 Ctrl-A+Ctrl-K 清行（全屏程序 vi/less/top 里跳过）。
 - 下载：[`terminal-9.3.6.amr`](dist/terminal-9.3.6.amr)
+
+### 9.3.8
+
+- 实测：包体 **472,850 B**，11 个条目，`md5:262d0d97…`
+- 原生插件 `libs/arm64/libjsapi_term.so` = **406,352 B**，ABI: arm64-orange、arm64
+- 页面字节码 `Component.js.bin` = **21,423 B**
+- 变化：★ **修 sshd 登录 bug**：应用起的 sshd 之前 `PasswordAuthentication=no` 且没写 authorized_keys → 电脑连上必然 Permission denied。现在打开密码认证、关掉 keyboard-interactive，并用 bind mount 把 /etc/shadow 盖成「root 口令 = ydpen2026」的副本（原厂口令未知；shadow 生成改在 C 里做，避免 shell 把 $5$ 哈希展开搞坏）。
+- 下载：[`terminal-9.3.8.amr`](dist/terminal-9.3.8.amr)
+
+### 9.3.9
+
+- 实测：包体 **472,904 B**，11 个条目，`md5:50f395ab…`
+- 原生插件 `libs/arm64/libjsapi_term.so` = **406,416 B**，ABI: arm64-orange、arm64
+- 页面字节码 `Component.js.bin` = **21,423 B**
+- 变化：sshdStop 改用 pid 文件杀进程（原先的 `pkill -f 'sshd -D -p'` 会匹配到自己的 sh -c 命令行导致自杀），并在停止时卸载 /etc/shadow 恢复原厂口令。
+- 下载：[`terminal-9.3.9.amr`](dist/terminal-9.3.9.amr)
 
 ---
 

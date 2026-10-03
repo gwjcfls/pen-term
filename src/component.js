@@ -508,7 +508,16 @@ export default {
     },
     startSshd() {
       var r = term.sshdStart(2222, '');
-      this.status = 'sshd :2222 ' + (r && r.ok ? '已启动' : '失败');
+      var ok = (r && r.ok);
+      this.status = 'sshd :2222 ' + (ok ? ('已启动 · 口令 ' + (r.password || '')) : '失败');
+      // 把连接方式打进终端里（可滚动查看，比一行状态栏清楚）
+      if (ok && this.sid) {
+        term.write(this.sid, 'echo; echo "== sshd 已启动，端口 2222 =="; ' +
+          'echo "电脑上执行:  ssh -p 2222 root@$(hostname -i 2>/dev/null || hostname)"; ' +
+          'echo "口令: ' + (r.password || '') + '   （或把电脑公钥放进 /userdisk/ssh/authorized_keys 免密）"; echo\n');
+        this.toBottom();
+        this.tick();
+      }
     },
     toggleSsh() { this.showSsh = !this.showSsh; },
     toggleKeys() { this.showKeys = !this.showKeys; this.layout(); },
