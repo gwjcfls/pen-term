@@ -14,29 +14,45 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
 
 
-def req(method, path, token, payload=None):
+def req(method, path, token, payload=None, tries=4):
     url = API + path
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    r = urllib.request.Request(url, data=data, method=method)
-    r.add_header("Authorization", "Bearer " + token)
-    r.add_header("Accept", "application/vnd.github+json")
-    r.add_header("User-Agent", "ydpen-gh-push")
-    if data:
-        r.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(r, timeout=60) as resp:
-            body = resp.read().decode("utf-8")
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "ignore")
-        print("[!] %s %s -> %s %s\n%s" % (method, path, e.code, e.reason, detail[:500]))
-        raise
+    last = None
+    for attempt in range(1, tries + 1):
+        r = urllib.request.Request(url, data=data, method=method)
+        r.add_header("Authorization", "Bearer " + token)
+        r.add_header("Accept", "application/vnd.github+json")
+        r.add_header("User-Agent", "ydpen-gh-push")
+        if data:
+            r.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(r, timeout=180) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "ignore")
+            if e.code in (500, 502, 503, 504) and attempt < tries:
+                last = "%s %s" % (e.code, detail[:200])
+                time.sleep(2 * attempt)
+                continue
+            print("[!] %s %s -> %s %s\n%s" % (method, path, e.code, e.reason, detail[:500]))
+            raise
+        except Exception as e:                     # 连接被重置/超时 → 重试
+            last = str(e)
+            if attempt < tries:
+                print("[i] %s %s 失败(%s)，第 %d 次重试…" % (method, path, e, attempt))
+                time.sleep(2 * attempt)
+                continue
+            print("[!] %s %s 重试 %d 次仍失败: %s" % (method, path, tries, last))
+            raise
+    raise RuntimeError(last)
 
 
 def walk(root):
@@ -48,6 +64,28 @@ def walk(root):
             rel = os.path.relpath(p, root).replace("\\", "/")
             out.append((rel, p))
     return sorted(out)
+
+
+def ensure_ref(owner, name, tok, files):
+    """空仓库不能直接建 blob（409 Git Repository is empty）→ 先用 Contents API 建一个文件拿到首个提交"""
+    try:
+        r = req("GET", "/repos/%s/%s/git/ref/heads/main" % (owner, name), tok)
+        return r["object"]["sha"]
+    except urllib.error.HTTPError:
+        pass
+    seed_rel, seed_path = None, None
+    for rel, p in files:
+        if rel.lower().startswith("readme"):
+            seed_rel, seed_path = rel, p
+            break
+    if seed_rel is None:
+        seed_rel, seed_path = ".gitkeep", None
+    content = open(seed_path, "rb").read() if seed_path else b""
+    print("[i] 空仓库：先用 Contents API 建 %s 以产生首个提交" % seed_rel)
+    req("PUT", "/repos/%s/%s/contents/%s" % (owner, name, seed_rel), tok,
+        {"message": "init repository", "content": base64.b64encode(content).decode("ascii")})
+    r = req("GET", "/repos/%s/%s/git/ref/heads/main" % (owner, name), tok)
+    return r["object"]["sha"]
 
 
 def main():
@@ -88,6 +126,10 @@ def main():
     owner, name = repo["owner"]["login"], repo["name"]
     print("[+] 仓库：%s" % repo["html_url"])
 
+    # 1.5) 空仓库要先产生首个提交，否则建 blob 会 409
+    parent = ensure_ref(owner, name, tok, files)
+    print("[i] 父提交 %s" % parent[:8])
+
     # 2) 建 blobs
     tree = []
     for rel, p in files:
@@ -102,7 +144,7 @@ def main():
     t = req("POST", "/repos/%s/%s/git/trees" % (owner, name), tok, {"tree": tree})
     msg = args.desc or ("add %s" % args.repo)
     c = req("POST", "/repos/%s/%s/git/commits" % (owner, name), tok,
-            {"message": msg, "tree": t["sha"], "parents": []})
+            {"message": msg, "tree": t["sha"], "parents": [parent]})
     print("[+] commit %s" % c["sha"][:8])
 
     # 4) ref

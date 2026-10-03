@@ -1,119 +1,137 @@
-# PenTerm —— 有道词典笔终端 miniapp
+# PenTerm —— 有道词典笔上的真终端（含完整构建工具链与全部历史版本）
 
-在**有道词典笔 YDPX7-1（X7 Pro）/ YDPX6-2（X6 Pro）** 上跑的**真终端**：
-本地 PTY shell + SSH 客户端 + 一键在笔上起 sshd，界面按 960×266 适配，**完全自研入口（不依赖官方 aiot-vue-cli）**。
+在**有道词典笔**（YDPX6/X7 系列，RK3562，PenOS 4.x）上跑一个**真正的 VT 终端**：
+本地 PTY shell + SSH 客户端 + 一键在笔上起 sshd，支持中文渲染、滚动回看、
+命令历史（可查看/编辑全部历史）与常用命令收藏。
 
-![终端运行 top](docs/screenshots/terminal-top.png)
+本仓库同时保存**制作过程**（交叉编译工具链、amr 打包器、点阵字体生成器、
+QuickJS 字节码编译器）和 **52 个历史版本**（0.1.0 → 9.3.6）的 .amr 成品。
 
-## 特性
+![真终端：top 输出列完美对齐](screenshots/01-真终端-top对齐.png)
 
-| 能力 | 说明 |
-|---|---|
-| **真 PTY** | `forkpty()` 起的真 shell，不是命令解析器 → `top` / `vi` / `less` 等全屏程序可用 |
-| **自绘 VT 渲染** | 插件里做 VT/ANSI 仿真 + 8×16 点阵渲染成 PNG，页面用 `<image>` 显示。框架只有比例字体（实测 `i`×61=241px vs `M`×61=790px），文本行永远对不齐，这条路绕开了它 |
-| **中文支持** | 16×16 CJK 点阵（GB2312 全字集 6938 字形），**双宽字符**占两列，中文文件名/输出正确且列对齐 |
-| **系统键盘输入** | 通过 `global` 模块 `startTextEdit` 拉起笔的系统输入法，「执行」回调取回文本 |
-| **命令历史回填** | 输入行显示「上一条：xxx」，点一下把命令灌进原生键盘，改完直接执行 |
-| **滚动回看** | VT 侧 600 行环形历史，触摸上下滑动翻页 + 「上翻/下翻/回到最新」 |
-| **SSH** | `/bin/ssh` 客户端（密码/密钥/自动填密码）；一键在笔上起 OpenSSH sshd，可从电脑 ssh 进笔 |
-| **VT 支持范围** | C0、`CSI A B C D E F G H f J K L M P @ S T X d m h l r s u`、SGR（含 256 色）、DEC 存光标、`?25` 光标、`?7` 自动换行、`?47/?1047/?1049` 备用屏、OSC 忽略、UTF-8、宽字符 |
+---
 
-![中文渲染](docs/screenshots/cjk.png)
+## 为什么需要自己实现终端
 
-## 安装
+词典笔的 miniapp 框架**只有比例字体**（实测 `i`×61=241px、`M`×61=790px、`0`×61=547px），
+用框架文字渲染跑 `vim`/`top` 会全乱，因为字符**列对不齐**。
 
-1. 笔需要 root（本项目配套的固件补丁见 `docs/`；或你自己的 root 方案）。
-2. 把 `dist/PenTerm-9.2.0.amr` 传到笔上安装：
+所以本方案把渲染下沉到**原生插件**：
 
-```sh
-adb push dist/PenTerm-9.2.0.amr /tmp/penterm.amr
-adb shell "miniapp_cli install /tmp/penterm.amr"
-adb shell "miniapp_cli start 8001999000000001 index"     # 注意：页面名不带 --
+```
+PTY 输出 ──► VT/ANSI 解析 ──► cols×rows 字符网格 ──► 8×16 点阵字体绘制成位图
+                                                        └─► 自带 zlib 编码成 PNG
+页面用 <image src="file://…"> 显示（每帧写新文件名，绕开框架的图片 URL 缓存）
 ```
 
-> ⚠ 换包必看：`miniapp_cli uninstall <appid>` → 等日志出现 `appDestroyed` → `install` → `start <appid> index`，
-> 并用 `grep appResumed` 的 `getVersion()` 确认新版本真的在跑（旧实例会一直活着误导你）。
-> 如果应用在重启后从桌面消失（日志里 `pm name=终端 type=removed`），**重新 install 一次**即可恢复注册表条目。
+字体来自笔上自带的 `cmtt10.ttf`（Computer Modern Typewriter，OFL 许可的**真等宽**字体），
+用 `tools/mkfont.py` 在 PC 侧光栅化成点阵表；中文另用 `tools/mkcjk.py` 生成 16×16 字形表。
 
-## 构建
+---
 
-工具有三个，都在 `tools/`（都不依赖官方私有 CLI）：
+## 功能
+
+| 功能 | 说明 |
+|---|---|
+| 本地 shell | `forkpty()` + `/bin/sh -i`，真 PTY，`top`/`vi`/`less` 都能跑 |
+| SSH 客户端 | `/bin/ssh -tt`，可自动填密码（从 PTY 输出里匹配 password 提示） |
+| 一键 sshd | `term.sshdStart(port)` 在笔上拉起 OpenSSH，电脑可 `ssh root@笔IP -p 2222` |
+| 中文渲染 | 16×16 CJK 点阵（见截图 02），标点/全角都对 |
+| 滚动回看 | 画面区上下滑动翻看历史行，有新输出自动回底 |
+| **命令历史** | 「历史」面板列出**全部**历史（分页），**点命令→载入键盘编辑**，**▶→直接执行** |
+| **常用命令** | 「常用」面板收藏常用命令，▶ 执行 / 最右侧 x 删除（防误触） |
+| Up/Dn 载入命令行 | 点快捷键条 Up/Dn 后，把 shell 命令行里正在编辑的内容（去掉提示符）灌进输入框 |
+
+面板截图：
+
+| 历史命令 | 常用命令 | 点条目载入键盘 |
+|---|---|---|
+| ![](screenshots/03-历史命令面板.png) | ![](screenshots/04-常用命令面板.png) | ![](screenshots/05-点条目载入键盘编辑.png) |
+
+中文渲染与"点屏幕不弹键盘"（9.3.3 起的交互约定）：
+
+| 中文 | 点画面不弹键盘 | Up 载入不重复执行 |
+|---|---|---|
+| ![](screenshots/02-中文渲染.png) | ![](screenshots/06-点屏幕不弹键盘.png) | ![](screenshots/07-Up载入命令行不重复执行.png) |
+
+---
+
+## 一键构建
+
+```powershell
+python tools\build_terminal.py --version 9.4.0 --install
+```
+
+四步：**交叉编译插件** → **在笔上编译页面 JS** → **打包 .amr** → **安装 + 同步保活包**。
+
+### 工具链（"制作过程"全在这）
 
 | 工具 | 作用 |
 |---|---|
-| `jsfmc.c` | 在**笔上**把 JS 编成框架认的 `.js.bin`（链接笔自己的 `libquickjs.so`；`.js.bin` 的容器头就是 QuickJS 字节码的一部分，必须整文件喂 `JS_ReadObject`） |
-| `pack_amr.py` | 打包 `.amr`：`manifest.json` + `cert`（除 manifest/icon 外全部文件）+ 多 ABI 放插件 |
-| `mkfont.py` / `mkcjk.py` / `mkicon.py` | ASCII 点阵 / CJK 点阵（从 TTF 光栅化）/ 应用图标 |
+| `tools/build_terminal.py` | 一键构建（插件 + 页面 + 打包 + 安装） |
+| `tools/jsfmc.c` | **QuickJS 字节码编译器**（在笔上运行，把 .js 编成框架要的 .js.bin） |
+| `tools/pack_amr.py` | 把 build 目录打成 .amr 包（含 manifest、图标、原生库按 ABI 分包） |
+| `tools/mkfont.py` | 用笔上的 cmtt10.ttf 生成 ASCII 等宽点阵（8×16） |
+| `tools/mkcjk.py` | 生成 16×16 中文点阵表 |
+| `tools/mkicon.py` | 生成/转换应用图标 |
+| `tools/scan_adb.py` / `tools/probe_ports.py` | 找笔的 ADB 地址 / 探测端口 |
+| `tools/gh_push.py` | 不用 git，直接走 GitHub REST API 推目录（本仓库就是它推的） |
 
-```powershell
-$root = "<本仓库父目录>"; $adb = "adb"; $s = "<笔序列号或 IP:5555>"
-$qj = "<quickjs 头文件目录>"     # 需要笔上 /usr/lib/libquickjs.so 对应的 quickjs.h
+### 构建时的三个坑
 
-# 1) 插件（zig 交叉编译，链接笔上的 libquickjs.so / libz.so.1）
-& zig cc -target aarch64-linux-gnu.2.29 -O2 -fPIC -shared -fvisibility=hidden -I $qj `
-  src/term.c <libquickjs.so> <libz.so.1> -o libjsapi_term.so -lpthread -lutil
-#   ⚠ custom_init_jsapis / custom_init_jsmodules 必须 __attribute__((visibility("default")))
+1. **`jsfmc` 需要 `LD_LIBRARY_PATH=/oem/YoudaoDictPen/output/libs:/usr/lib:/lib`**
+   —— 它链接了笔上的 `libyddal_base_log.so`，不带会报 `error while loading shared libraries`。
+2. **产物命名**：`jsfmc -n` 要传完整模块名（`Component.js`），输出文件必须是 `<模块名>.bin`。
+   写成 `%s.js.bin` 会落成 `Component.js.js.bin` —— 包里同时存在新旧两个文件、页面仍用旧的，
+   表现为"改了没生效"。
+3. **`/tmp` 是 tmpfs**：`jsfmc` 等工具重启即丢，统一放 `/userdisk/skip_re/tools/`。
 
-# 2) 字库（从笔自带字体生成；中文用 mkcjk.py）
-adb pull /etc/miniapp/resources/fonts/HarmonyOS_Sans_SC_Regular.ttf .
-python tools/mkcjk.py HarmonyOS_Sans_SC_Regular.ttf src/font_cjk.h 16
-adb pull /etc/miniapp/resources/latex/res/fonts/latin/optional/cmtt10.ttf .
-python tools/mkfont.py cmtt10.ttf src/font8x16.h 15
+---
 
-# 3) 页面（在笔上编译）
-adb push src/{app,base-page,component,page-index}.js /tmp/
-adb shell "cd /tmp && for f in app base-page component page-index; do /tmp/jsfmc -o /tmp/\$f.js.bin -n \$f.js /tmp/\$f.js; done"
-# 4) 打包
-python tools/pack_amr.py --src build --out PenTerm.amr --appid 8001999000000001 --name "终端" --version 9.2.0 `
-  --lib arm64=libjsapi_term.so --lib arm64-orange=libjsapi_term.so
+## 版本历史（dist/ 下 52 个 .amr）
+
+| 阶段 | 版本 | 关键进展 |
+|---|---|---|
+| 起步 | 0.1.0 – 0.8.0 | 打通 miniapp 生命周期、按键、PTY 雏形 |
+| 能跑 | 1.0.0 – 3.2.0 | 真 PTY + 输出显示 + 输入（系统键盘） |
+| 自绘 | 4.0.0 – 5.1.0 | 原生插件渲染 VT 网格成 PNG（列对齐、可跑 top） |
+| 自研入口 | 6.0.0 | 突破"自制 miniapp 入口"，可独立启动 |
+| 进阶 | 7.0.0 – 8.0.0 | 滚动回看、快捷键条、SSH |
+| 中文 | 9.0.0 – 9.2.0 | 16×16 CJK 点阵，中文/标点正常 |
+| 完整 | 9.3.0 – 9.3.6 | 命令历史面板、常用命令、Up/Dn 载入命令行、交互与 bug 修复 |
+
+每个版本都可以直接装：
+
+```sh
+adb push dist/terminal-9.3.6.amr /tmp/
+adb shell "miniapp_cli install /tmp/terminal-9.3.6.amr"
+adb shell "miniapp_cli start 8001999000000001 index"   # 8001999000000001 = 本应用的 appid
 ```
 
-## 自研入口契约（逆向出来的，缺一不可）
+---
 
-`app.js` 是应用入口，框架对它有一串隐式要求（官方 aiot-vue-cli 会注入这些胶水，用官方工具时看不到）：
-
-```js
-import './index.js';                 // ① 必须 import 页面模块，框架才会去求值/注册页面
-import './shell.js';
-import { BasePage } from './BasePage.js';
-
-App.meta = {                         // ② 应用配置
-  name: '终端', version: '9.2.0', isSingleJsBundle: false,
-  pages: { index: 'pages/index/index.vue', shell: 'pages/index/shell.vue' },  // 值是 .vue 源码路径
-  options: { style: { lessPaths: ['styles'] } },
-};
-$falcon.__AppClazz = App;            // ③ 框架从这里取 App 类
-$falcon.__loadModuleDefault = fn;    // ④ loadPage 里会调用它
-$falcon.__KEYFRAMES = {...};         // ⑤ 关键帧表
-// onLaunch: this.setViewPort(960); $falcon.useDefaultBasePageClass(BasePage)
-```
-
-**页面挂载的关键**：框架实例化的是**基类页面**（`useDefaultBasePageClass` 传进去的那个类），
-页面模块 default 导出的类不会被实例化 —— 所以挂载必须写在基类的 `onLoad` 里：
-
-```js
-// base-page.js
-import Component from './Component.js';
-export class BasePage extends $falcon.Page {
-  onLoad(options) {
-    super.onLoad(options);
-    this.setRootComponentOptions(Component);   // ★ 普通 Vue options 对象用这个；
-  }                                            //   setRootComponent 是留给 Vue 组件类的
-}
-```
-
-更多细节（官方胶水的完整行为、`$falcon` 只被写 3 个键、`__pages` 官方也不用、追踪方法）见 [docs/entry-contract.md](docs/entry-contract.md)。
-
-## 目录
+## 源码
 
 ```
-src/      应用与插件源码（app.js / base-page.js / component.js / page-index.js / term.c / term_vt.c / 字库 / zlib_min.h）
-tools/    构建工具（jsfmc.c / pack_amr.py / mkfont.py / mkcjk.py / mkicon.py / gh_push.py）
-dist/     打包好的 .amr
-docs/     截图与契约文档
+src/
+  term.c           原生插件（PTY、VT 仿真、PNG 渲染、store API、sshd 管理）
+  term_vt.c        VT/ANSI 状态机 + 位图渲染 + PNG 编码（自带 zlib）
+  font8x16.h       ASCII 点阵（由 mkfont.py 生成）
+  font_cjk.h       中文点阵（由 mkcjk.py 生成）
+  component.js     页面主逻辑（终端画面/输入/历史/常用/面板）
+  base-page.js, page-index.js, app.js, manifest.json 等
+tools/             构建工具链（见上表）
+docs/              工具链与入口契约、命令历史实现说明
+dist/              52 个历史版本 .amr
 ```
+
+---
+
+## 相关仓库
+
+- **sideload-keeper** —— 侧载应用保活（逆向 AppWhitelistCleaner + DNS 劫持 + 镜像 + DBUS 自愈）
+- **ydpen-toolkit** —— 有道词典笔改造工具集与逆向笔记（ADB root、OTA 补丁、jsapi 插件等）
 
 ## 许可
 
-代码 MIT（见 LICENSE）。字体见 [THIRD_PARTY.md](THIRD_PARTY.md)：
-`font8x16.h` 派生自笔上的 `cmtt10.ttf`（GUST Font License），`font_cjk.h` 派生自 HarmonyOS Sans SC（OFL）。
+MIT。词典笔的固件与自带资源版权归有道所有，本仓库只包含自己写的代码与逆向笔记。
