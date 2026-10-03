@@ -506,6 +506,13 @@ export default {
       this.toBottom();
       this.tick();
     },
+    // 顶栏「sshd」是开关：没跑就启动，已在跑就停掉（之前只会一直启动，再点也没反应）
+    toggleSshd() {
+      var st = null;
+      try { st = term.sshdStatus(); } catch (e) { console.warn('[term-ui] sshdStatus 失败: ' + e); }
+      if (st && st.count > 0) this.stopSshd(st);
+      else this.startSshd();
+    },
     startSshd() {
       var r = term.sshdStart(2222, '');
       var ok = (r && r.ok);
@@ -514,7 +521,21 @@ export default {
       if (ok && this.sid) {
         term.write(this.sid, 'echo; echo "== sshd 已启动，端口 2222 =="; ' +
           'echo "电脑上执行:  ssh -p 2222 root@$(hostname -i 2>/dev/null || hostname)"; ' +
-          'echo "口令: ' + (r.password || '') + '   （或把电脑公钥放进 /userdisk/ssh/authorized_keys 免密）"; echo\n');
+          'echo "口令: ' + (r.password || '') + '   （或把电脑公钥放进 /userdisk/ssh/authorized_keys 免密）"; ' +
+          'echo "（再点一次顶栏 sshd 即可停止并还原口令校验）"; echo\n');
+        this.toBottom();
+        this.tick();
+      }
+    },
+    stopSshd(st) {
+      try { term.sshdStop(); } catch (e) { console.warn('[term-ui] sshdStop 失败: ' + e); }
+      var still = null;
+      try { still = term.sshdStatus(); } catch (e) {}
+      var gone = !(still && still.count > 0);
+      this.status = 'sshd 已停止' + (gone ? '（口令校验已还原）' : '（仍有残留进程…）');
+      if (this.sid) {
+        term.write(this.sid, 'echo; echo "== sshd 已停止（原先 pid ' + ((st && st.pid) || '?') +
+          '），/etc/shadow 已还原 =="; echo\n');
         this.toBottom();
         this.tick();
       }
@@ -539,7 +560,7 @@ export default {
       h('text', { staticStyle: { color: '#8b949e', fontSize: '13px', flex: 1 } }, this.status),
       h('text', { staticStyle: { color: '#58a6ff', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.startLocal() } }, '本地'),
       h('text', { staticStyle: { color: '#d29922', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.toggleSsh() } }, 'SSH'),
-      h('text', { staticStyle: { color: '#f778ba', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.startSshd() } }, 'sshd'),
+      h('text', { staticStyle: { color: '#f778ba', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.toggleSshd() } }, 'sshd'),
       h('text', { staticStyle: { color: '#8b949e', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.clearScreen() } }, '清屏'),
       h('text', { staticStyle: { color: '#f85149', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.closeSession() } }, '断开'),
       h('text', { staticStyle: { color: '#c9d1d9', fontSize: '14px', marginRight: '10px' }, on: { click: () => this.selfTest() } }, '自检'),

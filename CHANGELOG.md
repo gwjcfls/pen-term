@@ -1,6 +1,6 @@
 # 更新日志 / CHANGELOG
 
-PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 50 个发布版本）。
+PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 51 个发布版本）。
 
 每个版本的 `.amr` 都在 [`dist/`](dist/)，GitHub 上每个版本也各自带一个 Release（附件就是这个包）。
 
@@ -61,6 +61,7 @@ PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 50 个发布版�
 | [`9.3.6`](dist/terminal-9.3.6.amr) | 467,821 | 400,392 | 20,939 | 11 | **修 bug**：Up/Dn 载入后 shell 原命令行仍有同一条命令，点「发送」会被追加成 `toptop`（… |
 | [`9.3.8`](dist/terminal-9.3.8.amr) | 472,850 | 406,352 | 21,423 | 11 | **修 sshd 登录 bug**：应用起的 sshd 之前 `PasswordAuthentication=no`… |
 | [`9.3.9`](dist/terminal-9.3.9.amr) | 472,904 | 406,416 | 21,423 | 11 | sshdStop 改用 pid 文件杀进程（原先的 `pkill -f 'sshd -D -p'` 会匹配到自己的 … |
+| [`9.4.0`](dist/terminal-9.4.0.amr) | 473,662 | 406,976 | 22,267 | 11 | **顶栏「sshd」改成开关**：之前只会调 sshdStart，所以在跑的时候再点没反应（还是一直提示已启动）。现… |
 
 ## 阶段
 
@@ -444,6 +445,14 @@ PenTerm 从 **0.1.0** 到 **9.3.6** 的完整版本记录（共 50 个发布版�
 - 页面字节码 `Component.js.bin` = **21,423 B**
 - 变化：sshdStop 改用 pid 文件杀进程（原先的 `pkill -f 'sshd -D -p'` 会匹配到自己的 sh -c 命令行导致自杀），并在停止时卸载 /etc/shadow 恢复原厂口令。
 - 下载：[`terminal-9.3.9.amr`](dist/terminal-9.3.9.amr)
+
+### 9.4.0
+
+- 实测：包体 **473,662 B**，11 个条目，`md5:1dbbb648…`
+- 原生插件 `libs/arm64/libjsapi_term.so` = **406,976 B**，ABI: arm64-orange、arm64
+- 页面字节码 `Component.js.bin` = **22,267 B**
+- 变化：★ **顶栏「sshd」改成开关**：之前只会调 sshdStart，所以在跑的时候再点没反应（还是一直提示已启动）。现在先查状态（插件端改为读 pid 文件 + 存活探测，应用重启后也认得），在跑就停（顺带卸载 /etc/shadow 还原原厂口令校验），没跑才启动。
+- 下载：[`terminal-9.4.0.amr`](dist/terminal-9.4.0.amr)
 
 ---
 

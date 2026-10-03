@@ -727,9 +727,18 @@ static JSValue js_sshd_status(JSContext *ctx, JSValueConst this_val, int argc, J
 {
     (void)this_val; (void)argc; (void)argv;
     JSValue o = JS_NewObject(ctx);
-    int alive = (g_sshd_pid > 0 && kill(g_sshd_pid, 0) == 0) ? 1 : 0;
-    JS_SetPropertyStr(ctx, o, "port", JS_NewInt32(ctx, g_sshd_port));
-    JS_SetPropertyStr(ctx, o, "pid", JS_NewInt32(ctx, (int)g_sshd_pid));
+    int pid = 0, alive = 0;
+    /* 不能只看内存里的 g_sshd_pid：应用重启后它归零，但 sshd 还在跑。
+     * 以 pid 文件为准，再加一次存活探测。 */
+    FILE *f = fopen("/tmp/sshd_term.pid", "r");
+    if (f) {
+        if (fscanf(f, "%d", &pid) != 1) pid = 0;
+        fclose(f);
+    }
+    if (pid > 0 && kill((pid_t)pid, 0) == 0) alive = 1;
+    else if (g_sshd_pid > 0 && kill(g_sshd_pid, 0) == 0) { pid = (int)g_sshd_pid; alive = 1; }
+    JS_SetPropertyStr(ctx, o, "port", JS_NewInt32(ctx, alive ? (g_sshd_port ? g_sshd_port : 2222) : 0));
+    JS_SetPropertyStr(ctx, o, "pid", JS_NewInt32(ctx, pid));
     JS_SetPropertyStr(ctx, o, "count", JS_NewInt32(ctx, alive));
     return o;
 }
