@@ -5,7 +5,8 @@
 命令历史（可查看/编辑全部历史）与常用命令收藏。
 
 本仓库同时保存**制作过程**（交叉编译工具链、amr 打包器、点阵字体生成器、
-QuickJS 字节码编译器）和 **52 个历史版本**（0.1.0 → 9.3.6）的 .amr 成品。
+QuickJS 字节码编译器）和 **48 个历史版本**（0.1.0 → 9.3.6）的 .amr 成品 ——
+每个版本在 **Releases** 里都单独发了一个，可以直接下载安装。
 
 ![真终端：top 输出列完美对齐](screenshots/01-真终端-top对齐.png)
 
@@ -74,6 +75,7 @@ python tools\build_terminal.py --version 9.4.0 --install
 | `tools/mkfont.py` | 用笔上的 cmtt10.ttf 生成 ASCII 等宽点阵（8×16） |
 | `tools/mkcjk.py` | 生成 16×16 中文点阵表 |
 | `tools/mkicon.py` | 生成/转换应用图标 |
+| `tools/glueboot.js` / `tools/gluetrace.c` | **入口 glue 探针**：摸清框架启动流程（自研 entry 的关键工具） |
 | `tools/scan_adb.py` / `tools/probe_ports.py` | 找笔的 ADB 地址 / 探测端口 |
 | `tools/gh_push.py` | 不用 git，直接走 GitHub REST API 推目录（本仓库就是它推的） |
 
@@ -88,22 +90,26 @@ python tools\build_terminal.py --version 9.4.0 --install
 
 ---
 
-## 版本历史（dist/ 下 52 个 .amr）
+## 版本历史（48 个 .amr）
+
+**每个版本做了什么、包体多大、插件多大，都记在 [CHANGELOG.md](CHANGELOG.md)**；
+GitHub 上每个版本各有一个 **Release**（附件即 .amr，可直接下载安装）。
 
 | 阶段 | 版本 | 关键进展 |
 |---|---|---|
 | 起步 | 0.1.0 – 0.8.0 | 打通 miniapp 生命周期、按键、PTY 雏形 |
-| 能跑 | 1.0.0 – 3.2.0 | 真 PTY + 输出显示 + 输入（系统键盘） |
-| 自绘 | 4.0.0 – 5.1.0 | 原生插件渲染 VT 网格成 PNG（列对齐、可跑 top） |
-| 自研入口 | 6.0.0 | 突破"自制 miniapp 入口"，可独立启动 |
-| 进阶 | 7.0.0 – 8.0.0 | 滚动回看、快捷键条、SSH |
-| 中文 | 9.0.0 – 9.2.0 | 16×16 CJK 点阵，中文/标点正常 |
-| 完整 | 9.3.0 – 9.3.6 | 命令历史面板、常用命令、Up/Dn 载入命令行、交互与 bug 修复 |
+| 能跑 | 1.0.0 – 3.2.0 | 原生插件 + 真 PTY + 输入（系统键盘） |
+| 自绘 | 4.0.0 – 5.1.0 | VT 网格渲染成 PNG（列对齐、可跑 top）+ 滚动回看 |
+| 自研入口 | 6.0.0 – 7.3.0 | 脱离官方 app.js.bin，包结构定型 |
+| 进阶 | 8.0.0 – 9.0.0 | SSH 自动填密码、一键 sshd、自研 entry 稳定 |
+| 中文 | 9.1.0 – 9.2.0 | 16×16 CJK 点阵（插件 141KB → 384KB），全角双宽 |
+| 完整 | 9.3.0 – 9.3.6 | 命令历史面板、常用命令、Up/Dn 载入命令行、bug 修复 |
 
-每个版本都可以直接装：
+任意版本都可以直接装：
 
 ```sh
 adb push dist/terminal-9.3.6.amr /tmp/
+adb shell "miniapp_cli uninstall 8001999000000001"      # 必须卸载（覆盖安装不重解原生库）
 adb shell "miniapp_cli install /tmp/terminal-9.3.6.amr"
 adb shell "miniapp_cli start 8001999000000001 index"   # 8001999000000001 = 本应用的 appid
 ```
@@ -113,25 +119,23 @@ adb shell "miniapp_cli start 8001999000000001 index"   # 8001999000000001 = 本�
 ## 源码
 
 ```
-src/
-  term.c           原生插件（PTY、VT 仿真、PNG 渲染、store API、sshd 管理）
-  term_vt.c        VT/ANSI 状态机 + 位图渲染 + PNG 编码（自带 zlib）
-  font8x16.h       ASCII 点阵（由 mkfont.py 生成）
-  font_cjk.h       中文点阵（由 mkcjk.py 生成）
-  component.js     页面主逻辑（终端画面/输入/历史/常用/面板）
-  base-page.js, page-index.js, app.js, manifest.json 等
-tools/             构建工具链（见上表）
-docs/              工具链与入口契约、命令历史实现说明
-dist/              52 个历史版本 .amr
+src/                 term.c / term_vt.c / component.js / font8x16.h / font_cjk.h …
+tools/               构建工具链（见上表）
+docs/                工具链与入口契约、BUILD-AND-NOTES（构建与踩坑全记录）、entry-contract（入口契约）
+dist/                48 个历史版本 .amr
+screenshots/         关键截图
+CHANGELOG.md         逐版本记录（实测数据 + 变更）
+THIRD_PARTY.md       第三方资源（字体 OFL 等）
 ```
 
 ---
 
 ## 相关仓库
 
-- **sideload-keeper** —— 侧载应用保活（逆向 AppWhitelistCleaner + DNS 劫持 + 镜像 + DBUS 自愈）
+- **sideload-keeper** —— 侧载应用保活（逆向 AppWhitelistCleaner + DNS 劫持 + 硬链接镜像自愈）
 - **ydpen-toolkit** —— 有道词典笔改造工具集与逆向笔记（ADB root、OTA 补丁、jsapi 插件等）
 
 ## 许可
 
-MIT。词典笔的固件与自带资源版权归有道所有，本仓库只包含自己写的代码与逆向笔记。
+MIT（见 [LICENSE](LICENSE)）。词典笔的固件与自带资源版权归有道所有，
+本仓库只包含自己写的代码、逆向笔记与自己的构建产物。
